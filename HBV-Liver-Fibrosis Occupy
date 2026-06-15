@@ -1,0 +1,127 @@
+HBV-Liver-Fibrosis
+
+This repository provides an open-source XGBoost-based model for multiclass liver fibrosis staging among individuals with previous or current hepatitis B virus (HBV) infection. The model was developed using routinely available clinical variables and predicts the probability of four fibrosis stages: F0, F1, F2, and F3. The final predicted fibrosis stage is determined by the class with the highest predicted probability.
+
+To use the model, users should first download this repository to their local computer. The repository contains the trained XGBoost model, the required feature list, a background dataset for SHAP interpretation, an input template, and the prediction script. The recommended folder structure is shown below:
+HBV-Liver-Fibrosis/
+├── model/
+│   ├── xgboost_fibrosis_model.rds
+│   ├── feature_names.rds
+│   └── background_data.rds
+├── input/
+│   └── input_template.csv
+├── results/
+├── predict.R
+└── README.md
+
+Users should prepare the input data using the template file input/input_template.csv. Each row represents one participant, and multiple participants can be analyzed simultaneously. The input file must contain the following variables: Patient_ID, GNRI, BMI, NPAR, ALB, TC, CRP, Creatinine, WtHR, HDL, and age.
+
+After completing the input file, users can open R or RStudio, set the working directory to the repository folder, and run the following code:
+# Set working directory to the repository folder
+# setwd("path/to/HBV-Liver-Fibrosis")
+
+# Load required packages
+library(dplyr)
+library(mlr3)
+library(mlr3learners)
+
+# Load trained model and feature names
+model <- readRDS("model/xgboost_fibrosis_model.rds")
+feature_names <- readRDS("model/feature_names.rds")
+
+# Read input data
+input_data <- read.csv("input/input_template.csv")
+
+# Check whether all required variables are included
+missing_features <- setdiff(feature_names, colnames(input_data))
+
+if (length(missing_features) > 0) {
+  stop(
+    paste(
+      "The following required variables are missing:",
+      paste(missing_features, collapse = ", ")
+    )
+  )
+}
+
+# Keep only required predictors
+newdata <- input_data %>%
+  select(all_of(feature_names))
+
+# Generate predictions
+pred <- model$predict_newdata(newdata)
+
+# Extract predicted probabilities
+prob_result <- as.data.frame(pred$prob)
+
+# Add patient ID and final predicted stage
+prediction_result <- cbind(
+  Patient_ID = input_data$Patient_ID,
+  prob_result,
+  Predicted_stage = pred$response
+)
+
+# Save prediction results
+dir.create("results", showWarnings = FALSE)
+
+write.csv(
+  prediction_result,
+  file = "results/fibrosis_prediction_results.csv",
+  row.names = FALSE
+)
+
+# Show results
+prediction_result
+
+
+
+The output file will be saved as results/fibrosis_prediction_results.csv. This file includes the predicted probabilities for F0, F1, F2, and F3, as well as the final predicted fibrosis stage for each participant.
+
+For individualized model interpretation, SHAP analysis can be used to estimate the contribution of each clinical variable to the predicted fibrosis stage. The following code provides an example of SHAP-based interpretation for the input participants:
+
+library(kernelshap)
+library(shapviz)
+library(ggplot2)
+
+# Load background data for SHAP calculation
+background_data <- readRDS("model/background_data.rds")
+
+# Define prediction function for multiclass probability output
+pred_fun <- function(object, newdata) {
+  pred <- object$predict_newdata(as.data.frame(newdata))
+  as.data.frame(pred$prob)
+}
+
+# Calculate SHAP values
+ks <- kernelshap(
+  object = model,
+  X = newdata,
+  bg_X = background_data,
+  pred_fun = pred_fun
+)
+
+# Convert to shapviz object
+sv <- shapviz(ks)
+
+# Plot SHAP summary for each fibrosis stage
+p_F0 <- sv_importance(sv[["0"]], kind = "bar", max_display = 10) +
+  ggtitle("SHAP Explanation: F0")
+
+p_F1 <- sv_importance(sv[["1"]], kind = "bar", max_display = 10) +
+  ggtitle("SHAP Explanation: F1")
+
+p_F2 <- sv_importance(sv[["2"]], kind = "bar", max_display = 10) +
+  ggtitle("SHAP Explanation: F2")
+
+p_F3 <- sv_importance(sv[["3"]], kind = "bar", max_display = 10) +
+  ggtitle("SHAP Explanation: F3")
+
+# Save SHAP plots
+ggsave("results/SHAP_F0.png", p_F0, width = 6, height = 5, dpi = 300)
+ggsave("results/SHAP_F1.png", p_F1, width = 6, height = 5, dpi = 300)
+ggsave("results/SHAP_F2.png", p_F2, width = 6, height = 5, dpi = 300)
+ggsave("results/SHAP_F3.png", p_F3, width = 6, height = 5, dpi = 300)
+
+The SHAP plots show which variables contributed most strongly to each fibrosis-stage prediction. Positive SHAP values indicate that a variable increases the predicted probability of a given fibrosis stage, whereas negative SHAP values indicate that a variable decreases that probability.
+
+This model is intended for research use and clinical decision-support exploration. It should not replace clinical judgment, transient elastography, laboratory evaluation, or specialist assessment. Users are encouraged to perform external validation before applying the model in independent clinical settings.
